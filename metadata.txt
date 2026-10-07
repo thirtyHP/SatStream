@@ -1,0 +1,15 @@
+[general]
+name=SatStream
+qgisMinimumVersion=3.22
+description=Stream, clip, and process open-source Sentinel and Landsat imagery for the current map extent via STAC + Cloud-Optimized GeoTIFFs.
+about=SatStream queries public STAC catalogs (Element84 Earth Search, Microsoft Planetary Computer) for imagery intersecting the current map canvas, lists available scenes with date / platform / GSD / cloud cover / catalog ID, and lets you stream visual, multispectral, or panchromatic products directly into QGIS or download them clipped to your extent.
+version=0.1.0
+author=HP
+email=you@example.com
+tracker=https://example.com/satstream/issues
+repository=https://example.com/satstream
+tags=remote sensing,satellite,sentinel,landsat,stac,cog,streaming
+category=Raster
+icon=icon.png
+experimental=True
+hasProcessingProvider=no
