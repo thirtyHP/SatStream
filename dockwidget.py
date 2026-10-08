@@ -49,7 +49,7 @@ from qgis.PyQt.QtWidgets import (
 )
 
 from . import stac_client
-from .credentials import AuthError, CopernicusAuth, UsgsAuth
+from .auth import AuthError, CopernicusAuth, UsgsAuth
 from .providers import PROVIDER_ORDER, PROVIDERS
 from .tasks import DownloadTask, SearchTask
 
