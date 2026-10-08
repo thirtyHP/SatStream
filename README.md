@@ -3,7 +3,7 @@
 Stream, clip, and process open-source Sentinel and Landsat imagery for the
 current map extent, straight from public STAC catalogs.
 
-## What it does
+USE
 
 1. **Platform Selection** — dropdown for Sentinel-2 L1C, Sentinel-2 L2A,
    Sentinel-3, Sentinel-5p, Copernicus DEM, Landsat 8, and Landsat 9.
@@ -73,22 +73,4 @@ can move this into the QGIS Authentication database).
   optionally clipped to the canvas extent (`outputBounds` in EPSG:4326),
   written as tiled + DEFLATE-compressed GeoTIFF.
 
-## Known caveats (worth knowing up front)
 
-- **Sentinel-2 L1C / Sentinel-3 / Sentinel-5p**: no public COGs exist,
-  so streaming is disabled; these platforms are search + authenticated
-  download (whole product .zip via CDSE — clipping doesn't apply).
-  A future version could stream them via a tile-rendering API.
-- **Panchromatic**: the 15 m pan band exists only in Landsat Collection 2
-  *Level-1*, which is not freely streamable (USGS requester-pays). The
-  button is wired up generically and reports this per scene. If you need
-  pan, the cleanest path is authenticated access via USGS M2M/EarthExplorer.
-- Landsat Level-2 surface reflectance is scaled integer data; use QGIS
-  min/max stretch (cumulative cut) for sensible display.
-
-## Next steps you might want
-
-- Cloud masking (Sentinel-2 SCL / Landsat QA_PIXEL) as a processing tool
-- Band-math presets (NDVI, NDWI) on loaded stacks
-- XYZ tile rendering for NetCDF collections via Planetary Computer
-- AOI-by-polygon selection instead of canvas extent
