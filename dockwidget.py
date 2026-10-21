@@ -9,20 +9,17 @@ from qgis.core import (
     QgsApplication,
     QgsCoordinateReferenceSystem,
     QgsCoordinateTransform,
-    QgsGeometry,
     QgsProject,
     QgsRasterLayer,
     QgsRectangle,
     QgsSettings,
 )
-from qgis.gui import QgsRubberBand
 from qgis.PyQt.QtCore import (
     QDate,
     QItemSelection,
     QItemSelectionModel,
     Qt,
 )
-from qgis.PyQt.QtGui import QColor
 from qgis.PyQt.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
@@ -44,12 +41,14 @@ from qgis.PyQt.QtWidgets import (
     QStackedWidget,
     QTableWidget,
     QTableWidgetItem,
+    QToolTip,
     QVBoxLayout,
     QWidget,
 )
 
 from . import stac_client
 from .auth import AuthError, CopernicusAuth, UsgsAuth
+from .footprints import FootprintOverlay, FootprintPickTool
 from .providers import PROVIDER_ORDER, PROVIDERS
 from .tasks import DownloadTask, SearchTask
 
@@ -64,7 +63,16 @@ class SatStreamDockWidget(QDockWidget):
         self.canvas = iface.mapCanvas()
         self._tasks = []          #keep task refs so they aren't GC'd
         self._layer_ids = []      #layers added by SatStream
-        self._footprint_band = None
+        self._scenes = []         #results of the last search
+        self._cycle_ids = ()      #overlapping scenes under the cursor
+        self._cycle_index = 0
+        self._cycle_clicked = False
+        self._prev_tool = None
+        self.footprints = FootprintOverlay(self.canvas)
+        self.pick_tool = FootprintPickTool(self.canvas)
+        self.pick_tool.hovered.connect(self._on_map_hover)
+        self.pick_tool.clicked.connect(self._on_map_click)
+        self.canvas.mapToolSet.connect(self._on_map_tool_changed)
         self._temp_dir = tempfile.mkdtemp(prefix="satstream_")
         self.cop_auth = CopernicusAuth()
         self.usgs_auth = UsgsAuth()
@@ -143,6 +151,16 @@ class SatStreamDockWidget(QDockWidget):
         self.table.horizontalHeader().setStretchLastSection(True)
         self.table.itemSelectionChanged.connect(self._on_row_selected)
         fp_layout.addWidget(self.table)
+        self.pick_check = QCheckBox("Pick footprints on the map")
+        self.pick_check.setChecked(True)
+        self.pick_check.setToolTip(
+            "Hover over a footprint to highlight it and click to select just "
+            "that scene. Ctrl+click (Cmd+click on Mac) adds or removes a "
+            "scene. Click again on overlapping footprints to step through "
+            "them. Drag to pan as usual."
+        )
+        self.pick_check.toggled.connect(self._on_pick_toggled)
+        fp_layout.addWidget(self.pick_check)
         select_row = QHBoxLayout()
         self.select_all_btn = QPushButton("Select All")
         self.select_all_btn.setToolTip(
@@ -520,9 +538,19 @@ class SatStreamDockWidget(QDockWidget):
         if not ok:
             self._set_status("Search failed: {}".format(error))
             return
+        self._scenes = scenes
+        self._reset_cycle()
         self._populate_table(scenes)
-        self._set_status("{} scene(s) found for the current extent."
-                         .format(len(scenes)))
+        self.footprints.set_scenes(scenes)
+        if not scenes:
+            self._set_status("No scenes found for the current extent.")
+            return
+        if self.pick_check.isChecked():
+            self._activate_pick_tool()
+        self._set_status(
+            "{} scene(s) found. Hover over a footprint on the map and click "
+            "to select it.".format(len(scenes))
+        )
 
     def _populate_table(self, scenes):
         cfg = self._cfg()
@@ -602,36 +630,150 @@ class SatStreamDockWidget(QDockWidget):
             "Selected all {} scene(s).".format(self.table.rowCount())
         )
 
-    #footprint preview
+    #footprints on the map
 
     def _on_row_selected(self):
-        scenes = self._selected_scenes()
-        self._clear_footprint()
-        if not scenes:
-            return
-        band = QgsRubberBand(self.canvas)
-        band.setColor(QColor(255, 140, 0, 200))
-        band.setFillColor(QColor(255, 140, 0, 40))
-        band.setWidth(2)
-        xform = QgsCoordinateTransform(
-            WGS84, self.canvas.mapSettings().destinationCrs(),
-            QgsProject.instance(),
-        )
-        for scene in scenes:
-            geom_json = scene.get("geometry")
-            if not geom_json:
-                continue
-            geom = QgsGeometry.fromWkt(_geojson_to_wkt(geom_json))
-            if geom.isEmpty():
-                continue
-            geom.transform(xform)
-            band.addGeometry(geom, None)
-        self._footprint_band = band
+        self.footprints.set_selected(s["id"] for s in self._selected_scenes())
 
-    def _clear_footprint(self):
-        if self._footprint_band:
-            self.canvas.scene().removeItem(self._footprint_band)
-            self._footprint_band = None
+    def _activate_pick_tool(self):
+        if self.canvas.mapTool() is not self.pick_tool:
+            self._prev_tool = self.canvas.mapTool()
+            self.canvas.setMapTool(self.pick_tool)
+
+    def _deactivate_pick_tool(self):
+        if self.canvas.mapTool() is self.pick_tool:
+            restored = False
+            if self._prev_tool is not None:
+                try:
+                    self.canvas.setMapTool(self._prev_tool)
+                    restored = True
+                except RuntimeError:  #previous tool was deleted
+                    pass
+            if not restored:
+                self.iface.actionPan().trigger()
+        self._prev_tool = None
+        self.footprints.set_hover(None)
+        QToolTip.hideText()
+
+    def _on_pick_toggled(self, checked):
+        if checked and self.footprints.has_scenes():
+            self._activate_pick_tool()
+        elif not checked:
+            self._deactivate_pick_tool()
+
+    def _on_map_tool_changed(self, new_tool, old_tool=None):
+        #the user switched from the picker to another QGIS tool, so
+        #reflect that in the checkbox
+        if (old_tool is self.pick_tool and new_tool is not self.pick_tool
+                and self.pick_check.isChecked()):
+            self.pick_check.blockSignals(True)
+            self.pick_check.setChecked(False)
+            self.pick_check.blockSignals(False)
+            self._prev_tool = None
+            self.footprints.set_hover(None)
+            QToolTip.hideText()
+
+    def _reset_cycle(self, ids=()):
+        self._cycle_ids = ids
+        self._cycle_index = 0
+        self._cycle_clicked = False
+
+    def _current_pick(self, candidates, advance):
+        """Choose which overlapping scene the cursor refers to.
+
+        The newest scene comes first. Clicking again on the same stack of
+        overlapping footprints steps to the next one.
+        """
+        ids = tuple(s["id"] for s in candidates)
+        if ids != self._cycle_ids:
+            self._reset_cycle(ids)
+        if advance:
+            if self._cycle_clicked:
+                self._cycle_index = (self._cycle_index + 1) % len(ids)
+            self._cycle_clicked = True
+        return candidates[self._cycle_index]
+
+    def _pick_tooltip(self, scene, count):
+        cloud = scene.get("cloud")
+        lines = ["{}  |  {}{}".format(
+            scene.get("datetime", ""),
+            _sensor_label(_sensor_key(scene)) or scene.get("platform", ""),
+            "  |  {:.1f}% cloud".format(cloud) if cloud is not None else "",
+        ), scene.get("id", "")]
+        if count > 1:
+            lines.append("{} of {} overlapping, click again for the next"
+                         .format(self._cycle_index + 1, count))
+        return "\n".join(lines)
+
+    def _on_map_hover(self, map_point, global_pos):
+        candidates = self.footprints.scenes_at(map_point)
+        if not candidates:
+            self.footprints.set_hover(None)
+            self._reset_cycle()
+            QToolTip.hideText()
+            return
+        scene = self._current_pick(candidates, advance=False)
+        self.footprints.set_hover(scene["id"])
+        QToolTip.showText(global_pos,
+                          self._pick_tooltip(scene, len(candidates)),
+                          self.canvas)
+
+    def _on_map_click(self, map_point, global_pos, modifiers):
+        candidates = self.footprints.scenes_at(map_point)
+        if not candidates:
+            return
+        scene = self._current_pick(candidates, advance=True)
+        self.footprints.set_hover(scene["id"])
+        additive = bool(modifiers & (Qt.ControlModifier | Qt.MetaModifier))
+        self._select_scene_row(scene["id"], additive)
+        QToolTip.showText(global_pos,
+                          self._pick_tooltip(scene, len(candidates)),
+                          self.canvas)
+
+    def _select_scene_row(self, scene_id, additive):
+        for row in range(self.table.rowCount()):
+            item = self.table.item(row, 0)
+            scene = item.data(Qt.UserRole) if item else None
+            if scene and scene["id"] == scene_id:
+                break
+        else:
+            return
+        model = self.table.model()
+        selection = QItemSelection(
+            model.index(row, 0),
+            model.index(row, self.table.columnCount() - 1),
+        )
+        if additive:
+            flags = QItemSelectionModel.Toggle | QItemSelectionModel.Rows
+        else:
+            flags = (QItemSelectionModel.ClearAndSelect
+                     | QItemSelectionModel.Rows)
+        self.table.selectionModel().select(selection, flags)
+        self.table.scrollToItem(item)
+        count = len(self._selected_scenes())
+        self._set_status("{} scene(s) selected. Latest pick: {}".format(
+            count, scene_id))
+
+    def suspend_map(self):
+        """Hide footprints and hand the map back when the panel closes."""
+        self._deactivate_pick_tool()
+        self.footprints.clear()
+
+    def resume_map(self):
+        """Redraw footprints when the panel is shown again."""
+        if self._scenes:
+            self.footprints.redraw()
+            self._on_row_selected()
+            if self.pick_check.isChecked():
+                self._activate_pick_tool()
+
+    def cleanup(self):
+        self.suspend_map()
+        self.footprints.remove()
+        try:
+            self.canvas.mapToolSet.disconnect(self._on_map_tool_changed)
+        except TypeError:
+            pass
 
     #tools
 
@@ -843,7 +985,6 @@ class SatStreamDockWidget(QDockWidget):
     #clear
 
     def _on_clear_layers(self):
-        self._clear_footprint()
         project = QgsProject.instance()
         for layer_id in self._layer_ids:
             if project.mapLayer(layer_id):
@@ -856,32 +997,8 @@ class SatStreamDockWidget(QDockWidget):
         self._set_status("SatStream layers cleared.")
 
     def closeEvent(self, event):
-        self._clear_footprint()
+        self.suspend_map()
         super().closeEvent(event)
-
-
-def _geojson_to_wkt(geom):
-    """Tiny GeoJSON Polygon/MultiPolygon -> WKT converter (no deps)."""
-    gtype = geom.get("type")
-    coords = geom.get("coordinates", [])
-
-    def ring(r):
-        return ", ".join("{} {}".format(x, y) for x, y, *_ in r)
-
-    if gtype == "Polygon":
-        return "POLYGON ({})".format(
-            ", ".join("({})".format(ring(r)) for r in coords)
-        )
-    if gtype == "MultiPolygon":
-        return "MULTIPOLYGON ({})".format(
-            ", ".join(
-                "({})".format(
-                    ", ".join("({})".format(ring(r)) for r in poly)
-                )
-                for poly in coords
-            )
-        )
-    return ""
 
 
 _ID_PREFIXES = [

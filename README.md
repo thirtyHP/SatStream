@@ -9,8 +9,13 @@ USE
    Sentinel-3, Sentinel-5p, Copernicus DEM, Landsat 8, and Landsat 9.
 2. **Filters** — max cloud cover slider (0–100 %) plus start/end date.
 3. **Imagery Footprint** — results table with Date, Platform, GSD,
-   Cloud %, and Catalog ID. Selecting rows highlights the scene
-   footprints on the canvas.
+   Cloud %, and Catalog ID. Every footprint is drawn on the map as soon
+   as the search finishes. With "Pick footprints on the map" ticked,
+   hovering highlights the footprint under the cursor and shows its date,
+   sensor and cloud cover. Clicking selects just that scene, Ctrl+click
+   (Cmd+click on Mac) adds or removes it from the selection, and clicking
+   again on overlapping footprints steps through them, newest first.
+   Dragging still pans the map. Selected scenes are outlined in orange.
 4. **Tools** — Zoom to Selected Layer, Load Visual, Load Multispectral,
    Load Panchromatic, Download Selected (optionally clipped to the map
    extent), and Clear Layers.

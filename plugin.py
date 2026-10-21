@@ -31,9 +31,14 @@ class SatStreamPlugin:
             self.iface.addDockWidget(Qt.RightDockWidgetArea, self.dock)
             self.dock.visibilityChanged.connect(self.action.setChecked)
         self.dock.setVisible(checked)
+        if checked:
+            self.dock.resume_map()
+        else:
+            self.dock.suspend_map()
 
     def unload(self):
         if self.dock is not None:
+            self.dock.cleanup()
             self.iface.removeDockWidget(self.dock)
             self.dock.deleteLater()
             self.dock = None
