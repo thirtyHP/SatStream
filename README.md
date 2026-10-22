@@ -1,7 +1,8 @@
 # SatStream — QGIS Plugin
 
-Stream, clip, and process open-source Sentinel and Landsat imagery for the
-current map extent, straight from public STAC catalogs.
+Stream, clip, and process open-source Sentinel and Landsat imagery directly to your QGIS map extent, straight from public STAC catalogs.
+
+No more fuss with provider accounts, web browsers, or unzipping imagery. Just zoom to any place on your map and load imagery using the easy to user interface. 
 
 USE
 
